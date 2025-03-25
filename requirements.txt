@@ -1,0 +1,10 @@
+# CUDA 12.8
+
+torch == 2.2.1
+torchvision == 0.17.1
+pyiqa == 0.1.5
+mmcv == 2.2.0
+tqdm
+seaborn
+scikit-image
+adamp
