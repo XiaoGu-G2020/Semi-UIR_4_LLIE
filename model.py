@@ -9,12 +9,12 @@ class SFT_layer(nn.Module):
         super(SFT_layer, self).__init__()
         self.conv_gamma = nn.Sequential(
             nn.Conv2d(channels_in, channels_out, 1, 1, 0, bias=False),
-            nn.LeakyReLU(0.1, True),
+            nn.LeakyReLU(0.2, True),
             nn.Conv2d(channels_out, channels_out, 1, 1, 0, bias=False),
         )
         self.conv_beta = nn.Sequential(
             nn.Conv2d(channels_in, channels_out, 1, 1, 0, bias=False),
-            nn.LeakyReLU(0.1, True),
+            nn.LeakyReLU(0.2, True),
             nn.Conv2d(channels_out, channels_out, 1, 1, 0, bias=False),
         )
 
@@ -40,7 +40,7 @@ class IGM(nn.Module):
                              padding=(kernel_size - 1) // 2, bias=False)
         self.sft = SFT_layer(self.channels_in, self.channels_out)
 
-        self.relu = nn.LeakyReLU(0.1, True)
+        self.relu = nn.LeakyReLU(0.2, True)
 
     def forward(self, x, inter):
         '''
@@ -301,7 +301,7 @@ class AIMnet(nn.Module):
         super(AIMnet, self).__init__()
 
         self.n_feat, self.height, self.width = n_feat, height, width
-        self.act = nn.LeakyReLU(0.1, True)
+        self.act = nn.LeakyReLU(0.2, True)
         atrous = [1, 2, 3, 4]
 
         rcb_top = [RCB(int(n_feat * chan_factor ** 0), self.act, bias=bias) for _ in range(n_RCB)]
