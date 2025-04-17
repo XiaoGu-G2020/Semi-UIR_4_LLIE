@@ -252,6 +252,25 @@ class AtrousBlock(nn.Module):
         output = self.att(data, x_total)
         return output
 
+class EnhancedAtrousBlock(AtrousBlock):
+    def __init__(self, mid_channels, kernel_size, stride, activation, atrous=[1,2,3,4]):  # 显式声明参数
+        super().__init__(mid_channels, kernel_size, stride, activation, atrous)
+        self.noise_gate = nn.Sequential(
+            nn.Conv2d(mid_channels, 1, 3, padding=1),
+            nn.Sigmoid()  # 噪声门控掩码
+        )
+        
+    def forward(self, data):
+        x1 = self.act(self.atrous_layers[0](data))
+        x2 = self.act(self.atrous_layers[1](data))
+        x3 = self.act(self.atrous_layers[2](data))
+        x4 = self.act(self.atrous_layers[3](data))
+
+        x_total = self.act(self.conv(torch.cat((x1, x2, x3, x4), 1)))
+        output = self.att(data, x_total)
+
+        noise_mask = self.noise_gate(data)
+        return output * noise_mask + data * (1-noise_mask)
 
 class AIMnet(nn.Module):
     def __init__(self, n_feat=32, height=256, width=256, n_RCB=2, chan_factor=2, bias=True):
@@ -267,9 +286,9 @@ class AIMnet(nn.Module):
         self.dau_mid = nn.Sequential(*rcb_mid)
         rcb_bot = [RCB(int(n_feat * chan_factor ** 2), self.act, bias=bias) for _ in range(n_RCB)]
         self.dau_bot = nn.Sequential(*rcb_bot)
-        self.atb_top = AtrousBlock(int(n_feat * chan_factor ** 0), 3, 1, self.act, atrous)
-        self.atb_mid = AtrousBlock(int(n_feat * chan_factor ** 1), 3, 1, self.act, atrous)
-        self.atb_bot = AtrousBlock(int(n_feat * chan_factor ** 2), 3, 1, self.act, atrous)
+        self.atb_top = EnhancedAtrousBlock(int(n_feat * chan_factor ** 0), 3, 1, self.act, atrous)
+        self.atb_mid = EnhancedAtrousBlock(int(n_feat * chan_factor ** 1), 3, 1, self.act, atrous)
+        self.atb_bot = EnhancedAtrousBlock(int(n_feat * chan_factor ** 2), 3, 1, self.act, atrous)
         self.nl_top = NonLocalSparseAttention(channels=int(n_feat * chan_factor ** 0))
         self.nl_mid = NonLocalSparseAttention(channels=int(n_feat * chan_factor ** 1))
         self.nl_bot = NonLocalSparseAttention(channels=int(n_feat * chan_factor ** 2))
