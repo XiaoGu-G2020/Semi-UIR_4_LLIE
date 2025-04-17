@@ -178,26 +178,50 @@ class ContextBlock(nn.Module):
         x = x + channel_add_term
         return x
 
+class FrequencySeparation(nn.Module):
+    def __init__(self, channels, kernel_size=5):
+        super().__init__()
+        # 低频通路使用高斯模糊
+        self.gaussian = nn.Conv2d(channels, channels, kernel_size, 
+                                padding=kernel_size//2, groups=channels, bias=False)
+        # 高频通路使用锐化卷积
+        self.high_pass = nn.Conv2d(channels, channels, 3, padding=1, bias=False)
+        # 参数初始化
+        self._init_gaussian(kernel_size)
+        nn.init.xavier_normal_(self.high_pass.weight)
 
-# Residual Context Block (RCB)
+    def _init_gaussian(self, kernel_size):
+        sigma = 0.3*((kernel_size-1)*0.5 - 1) + 0.8
+        ax = torch.arange(kernel_size, dtype=torch.float32) - (kernel_size-1)/2.0
+        xx, yy = torch.meshgrid(ax, ax)
+        kernel = torch.exp(-(xx**2 + yy**2)/(2*sigma**2))
+        kernel = kernel / kernel.sum()
+        self.gaussian.weight.data = kernel.repeat(self.gaussian.in_channels,1,1,1)
+        self.gaussian.weight.requires_grad_(False)  # 固定高斯核
+
+    def forward(self, x):
+        low_freq = self.gaussian(x)
+        high_freq = x - low_freq
+        high_freq = self.high_pass(high_freq)
+        return low_freq + high_freq  # 保持残差连接
+
 class RCB(nn.Module):
     def __init__(self, n_feat, act, bias=True):
         super(RCB, self).__init__()
-
         self.act = act
+        self.freq_sep = FrequencySeparation(n_feat)  # 新增频域分离层
         self.body = nn.Sequential(
-            nn.Conv2d(n_feat, n_feat, kernel_size=3, stride=1, padding=1, bias=bias),
+            self.freq_sep,  # 先进行频域分离
+            nn.Conv2d(n_feat, n_feat, 3, padding=1, bias=bias),
             self.act,
-            nn.Conv2d(n_feat, n_feat, kernel_size=3, stride=1, padding=1, bias=bias)
+            nn.Conv2d(n_feat, n_feat, 3, padding=1, bias=bias)
         )
         self.gcnet = ContextBlock(n_feat, self.act, bias=bias)
 
     def forward(self, x):
         res = self.body(x)
         res = self.act(self.gcnet(res))
-        res = x + res
-        return res
-
+        return x + res
 
 # Attention Feature Fusion (AFF)
 class AFF(nn.Module):
