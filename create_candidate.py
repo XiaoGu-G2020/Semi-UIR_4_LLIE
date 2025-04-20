@@ -8,8 +8,8 @@ from torchvision.transforms import transforms
 
 # input_dir = 'data/unlabeled/input'
 # result_dir = 'data/unlabeled/candidate'
-input_dir = 'data/unlabeled/input'
-result_dir = 'data/unlabeled/candidate'
+input_dir = 'data/LOLv1/unlabeled/input'
+result_dir = 'data/LOLv1/unlabeled/candidate'
 if result_dir not in os.listdir(input_dir):
     os.makedirs(result_dir)
 input_lists = glob(join(input_dir, '*.*'))

@@ -9,12 +9,12 @@ class SFT_layer(nn.Module):
         super(SFT_layer, self).__init__()
         self.conv_gamma = nn.Sequential(
             nn.Conv2d(channels_in, channels_out, 1, 1, 0, bias=False),
-            nn.LeakyReLU(0.1, True),
+            nn.LeakyReLU(0.2, True),
             nn.Conv2d(channels_out, channels_out, 1, 1, 0, bias=False),
         )
         self.conv_beta = nn.Sequential(
             nn.Conv2d(channels_in, channels_out, 1, 1, 0, bias=False),
-            nn.LeakyReLU(0.1, True),
+            nn.LeakyReLU(0.2, True),
             nn.Conv2d(channels_out, channels_out, 1, 1, 0, bias=False),
         )
 
@@ -40,7 +40,7 @@ class IGM(nn.Module):
                              padding=(kernel_size - 1) // 2, bias=False)
         self.sft = SFT_layer(self.channels_in, self.channels_out)
 
-        self.relu = nn.LeakyReLU(0.1, True)
+        self.relu = nn.LeakyReLU(0.2, True)
 
     def forward(self, x, inter):
         '''
@@ -178,26 +178,50 @@ class ContextBlock(nn.Module):
         x = x + channel_add_term
         return x
 
+class FrequencySeparation(nn.Module):
+    def __init__(self, channels, kernel_size=5):
+        super().__init__()
+        # 低频通路使用高斯模糊
+        self.gaussian = nn.Conv2d(channels, channels, kernel_size, 
+                                padding=kernel_size//2, groups=channels, bias=False)
+        # 高频通路使用锐化卷积
+        self.high_pass = nn.Conv2d(channels, channels, 3, padding=1, bias=False)
+        # 参数初始化
+        self._init_gaussian(kernel_size)
+        nn.init.xavier_normal_(self.high_pass.weight)
 
-# Residual Context Block (RCB)
+    def _init_gaussian(self, kernel_size):
+        sigma = 0.3*((kernel_size-1)*0.5 - 1) + 0.8
+        ax = torch.arange(kernel_size, dtype=torch.float32) - (kernel_size-1)/2.0
+        xx, yy = torch.meshgrid(ax, ax)
+        kernel = torch.exp(-(xx**2 + yy**2)/(2*sigma**2))
+        kernel = kernel / kernel.sum()
+        self.gaussian.weight.data = kernel.repeat(self.gaussian.in_channels,1,1,1)
+        self.gaussian.weight.requires_grad_(False)  # 固定高斯核
+
+    def forward(self, x):
+        low_freq = self.gaussian(x)
+        high_freq = x - low_freq
+        high_freq = self.high_pass(high_freq)
+        return low_freq + high_freq  # 保持残差连接
+
 class RCB(nn.Module):
     def __init__(self, n_feat, act, bias=True):
         super(RCB, self).__init__()
-
         self.act = act
+        self.freq_sep = FrequencySeparation(n_feat)  # 新增频域分离层
         self.body = nn.Sequential(
-            nn.Conv2d(n_feat, n_feat, kernel_size=3, stride=1, padding=1, bias=bias),
+            self.freq_sep,  # 先进行频域分离
+            nn.Conv2d(n_feat, n_feat, 3, padding=1, bias=bias),
             self.act,
-            nn.Conv2d(n_feat, n_feat, kernel_size=3, stride=1, padding=1, bias=bias)
+            nn.Conv2d(n_feat, n_feat, 3, padding=1, bias=bias)
         )
         self.gcnet = ContextBlock(n_feat, self.act, bias=bias)
 
     def forward(self, x):
         res = self.body(x)
         res = self.act(self.gcnet(res))
-        res = x + res
-        return res
-
+        return x + res
 
 # Attention Feature Fusion (AFF)
 class AFF(nn.Module):
@@ -252,13 +276,32 @@ class AtrousBlock(nn.Module):
         output = self.att(data, x_total)
         return output
 
+class EnhancedAtrousBlock(AtrousBlock):
+    def __init__(self, mid_channels, kernel_size, stride, activation, atrous=[1,2,3,4]):  # 显式声明参数
+        super().__init__(mid_channels, kernel_size, stride, activation, atrous)
+        self.noise_gate = nn.Sequential(
+            nn.Conv2d(mid_channels, 1, 3, padding=1),
+            nn.Sigmoid()  # 噪声门控掩码
+        )
+        
+    def forward(self, data):
+        x1 = self.act(self.atrous_layers[0](data))
+        x2 = self.act(self.atrous_layers[1](data))
+        x3 = self.act(self.atrous_layers[2](data))
+        x4 = self.act(self.atrous_layers[3](data))
+
+        x_total = self.act(self.conv(torch.cat((x1, x2, x3, x4), 1)))
+        output = self.att(data, x_total)
+
+        noise_mask = self.noise_gate(data)
+        return output * noise_mask + data * (1-noise_mask)
 
 class AIMnet(nn.Module):
     def __init__(self, n_feat=32, height=256, width=256, n_RCB=2, chan_factor=2, bias=True):
         super(AIMnet, self).__init__()
 
         self.n_feat, self.height, self.width = n_feat, height, width
-        self.act = nn.LeakyReLU(0.1, True)
+        self.act = nn.LeakyReLU(0.2, True)
         atrous = [1, 2, 3, 4]
 
         rcb_top = [RCB(int(n_feat * chan_factor ** 0), self.act, bias=bias) for _ in range(n_RCB)]
@@ -267,9 +310,9 @@ class AIMnet(nn.Module):
         self.dau_mid = nn.Sequential(*rcb_mid)
         rcb_bot = [RCB(int(n_feat * chan_factor ** 2), self.act, bias=bias) for _ in range(n_RCB)]
         self.dau_bot = nn.Sequential(*rcb_bot)
-        self.atb_top = AtrousBlock(int(n_feat * chan_factor ** 0), 3, 1, self.act, atrous)
-        self.atb_mid = AtrousBlock(int(n_feat * chan_factor ** 1), 3, 1, self.act, atrous)
-        self.atb_bot = AtrousBlock(int(n_feat * chan_factor ** 2), 3, 1, self.act, atrous)
+        self.atb_top = EnhancedAtrousBlock(int(n_feat * chan_factor ** 0), 3, 1, self.act, atrous)
+        self.atb_mid = EnhancedAtrousBlock(int(n_feat * chan_factor ** 1), 3, 1, self.act, atrous)
+        self.atb_bot = EnhancedAtrousBlock(int(n_feat * chan_factor ** 2), 3, 1, self.act, atrous)
         self.nl_top = NonLocalSparseAttention(channels=int(n_feat * chan_factor ** 0))
         self.nl_mid = NonLocalSparseAttention(channels=int(n_feat * chan_factor ** 1))
         self.nl_bot = NonLocalSparseAttention(channels=int(n_feat * chan_factor ** 2))
