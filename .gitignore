@@ -1,9 +1,6 @@
 *.png
 /__pycache__
 raw/*
-data/labeled/*
-data/test/*
-data/unlabeled/*
-data/val/*
+data/*
 model/ckpt/*
 model/log/*
