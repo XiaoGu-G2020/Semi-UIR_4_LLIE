@@ -51,7 +51,10 @@ class Trainer:
         self.optimizer_s = AdamP(self.model.parameters(), lr=2e-4, betas=(0.9, 0.999), weight_decay=1e-4)
         # self.lr_scheduler_s = lr_scheduler.StepLR(self.optimizer_s, step_size=100, gamma=0.1)
         self.lr_scheduler_s = lr_scheduler.MultiStepLR(self.optimizer_s, milestones=[100, 150], gamma=0.1)
-
+        self.early_stop_patience = 10
+        self.best_val_psnr = 0.0
+        self.early_stop_counter = 0
+        self.best_model_weights = None
     @torch.no_grad()
     def update_teachers(self, teacher, itera, keep_rate=0.996):
         # exponential moving average(EMA)
@@ -116,6 +119,26 @@ class Trainer:
                 ckpt_name = str(self.args.save_path) + 'model_e{}.pth'.format(str(epoch))
                 print("Saving a checkpoint: {} ...".format(str(ckpt_name)))
                 torch.save(state, ckpt_name)
+
+            val_psnr = self._valid_epoch(max(0, epoch))
+            
+            current_psnr = sum(psnr_val) / len(psnr_val)
+            if current_psnr > self.best_val_psnr:
+                self.best_val_psnr = current_psnr
+                self.early_stop_counter = 0
+                # 保存最佳模型权重
+                self.best_model_weights = self.model.module.state_dict().copy()
+                print(f"发现新最佳PSNR: {self.best_val_psnr:.4f}")
+            else:
+                self.early_stop_counter += 1
+                print(f"早停计数器: {self.early_stop_counter}/{self.early_stop_patience}")
+                
+            # 触发早停条件
+            if self.early_stop_counter >= self.early_stop_patience:
+                print(f"\n早停触发! 最佳验证PSNR: {self.best_val_psnr:.4f}")
+                # 恢复最佳模型权重
+                self.model.module.load_state_dict(self.best_model_weights)
+                break
 
     def _train_epoch(self, epoch):
         sup_loss = AverageMeter()
