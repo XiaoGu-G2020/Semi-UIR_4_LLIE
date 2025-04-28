@@ -8,7 +8,7 @@ data_set_split(
         input_folders=['./raw/LOLv1/our485/low'],
         label_folders=['./raw/LOLv1/our485/high'],
         target_folder='./data/LOLv1',
-        labeled_scale=0.9
+        labeled_scale=0.3
     ) 
 
 if __name__ == '__main__':
